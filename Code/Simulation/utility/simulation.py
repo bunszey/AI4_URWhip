@@ -4,7 +4,7 @@ import numpy as np
 from utility.rotations import *
 import mediapy as media
 import time
-
+from utility.trajectory import MinJerkTrajectoryPlanner
 
 class Simulation:
     def __init__(self, args):
@@ -23,9 +23,10 @@ class Simulation:
         self.model  = mujoco.MjModel.from_xml_path( '../../Models/universal_robots_ur5e/' + self.model_name + ".xml" )  
         self.data   = mujoco.MjData(self.model)
         self.renderer = mujoco.Renderer(self.model, 480, 640)
+        self.planner = MinJerkTrajectoryPlanner()
 
         # Renderer settings. 
-        self.fps = 60  
+        self.fps = 240  
         self.frames = []
 
 
@@ -102,6 +103,49 @@ class Simulation:
         self.q6f_max = self.action_space_high[11]
         self.t_max = self.action_space_high[12]
 
+
+    def controller(self):
+        qpos_original = self.data.qpos.copy()
+        qvel_original = self.data.qvel.copy()
+        qacc_original = self.data.qacc.copy()
+
+        # Zero the acceleration for gravity compensation
+        self.data.qacc[:] = 0
+        mujoco.mj_inverse(self.model, self.data)  # Calculate the required torques for zero acceleration under gravity
+        gravity_compensation = self.data.qfrc_inverse[:6].copy()  # Copy the compensation torques
+
+        # Restore the original acceleration values
+        self.data.qacc[:] = qacc_original
+
+        desired_position = self.planner.get_desired_position(self.data.time)
+        desired_velocity = self.planner.get_desired_velocity(self.data.time)
+
+        # Calculate position and velocity errors
+        position_error = desired_position - self.data.qpos[:6]
+        velocity_error = desired_velocity - self.data.qvel[:6]
+
+        # Adapt stiffness and damping matrices
+        # Define parameters for adaptation
+        beta = 0.9
+        a = 0.01
+        C = 20.0
+
+        # Compute tracking error epsilon(t)
+        epsilon = position_error + beta * velocity_error
+
+        # Adapt impedance matrices K(t) and B(t)
+        gamma = a / (1 + C * np.linalg.norm(epsilon)**2)
+        K = np.diag(epsilon * position_error / gamma)
+        B = np.diag(epsilon * velocity_error / gamma)
+
+
+        # Calculate control torque with gravity compensation
+        torque = K @ position_error + B @ velocity_error + gravity_compensation[:6] 
+        self.data.ctrl[:6] = torque
+
+    def random_action(self):
+        return np.random.uniform(self.action_space_low, self.action_space_high)
+
     def render_image(self):
         self.renderer.update_scene(self.data, camera="fixed", scene_option=dict())
         pixels = self.renderer.render()
@@ -109,6 +153,16 @@ class Simulation:
 
     def write_image(self, image_name = 'output_frame.png'):
         media.write_image(image_name, self.render_image())
+
+    def add_frame_if_needed(self):
+        if len(self.frames) < self.data.time * self.fps:
+            self.add_frame()
+
+    def add_frame(self):
+        self.frames.append(self.render_image())
+
+    def render_video(self, video_name = 'output_video.mp4'):
+        media.write_video(video_name, self.frames, fps=self.fps)
 
     def distance_to_target(self):
         # Get the Euclidean distance between the tip of the whip and the target

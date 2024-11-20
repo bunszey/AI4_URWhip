@@ -2,11 +2,19 @@ import numpy as np
 
 
 class MinJerkTrajectoryPlanner:
-    def __init__(self, initial_positions, final_positions, duration):
-        self.q_i = np.array(initial_positions)  # Initial joint positions (6 joints)
-        self.q_f = np.array(final_positions)    # Final joint positions (6 joints)
-        self.D = duration                       # Duration of the trajectory
-        self.delta_q = self.q_f - self.q_i      # Change in joint positions
+    def __init__(self):
+        self.q_i = None
+        self.q_f = None
+        self.delta_q = None
+        self.D = None
+
+    def set_positions(self, initial_positions, final_positions):
+        self.q_i = np.array(initial_positions)
+        self.q_f = np.array(final_positions)
+        self.delta_q = self.q_f - self.q_i
+
+    def set_duration(self, duration):
+        self.D = duration
 
     def get_desired_position(self, t):
         if t >= self.D:
