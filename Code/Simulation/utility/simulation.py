@@ -11,6 +11,8 @@ class Simulation:
         # The whole argument passed to the main python file. 
         self.args = args
 
+        self.extra_run_time = 0.0
+
         # Controller, objective function and the objective values' array
         self.ctrl     = None
         self.obj      = None
@@ -144,22 +146,32 @@ class Simulation:
         self.data.ctrl[:6] = torque
 
     def random_action(self):
-        return np.random.uniform(self.action_space_low, self.action_space_high)
+        action = np.random.uniform(self.action_space_low, self.action_space_high)
+    
+        return action
+    
+    def ramdom_final_position_action(self, initial_position):
+        action = np.random.uniform(self.action_space_low, self.action_space_high)
+        action[0:6] = initial_position
+        return action
 
-    def render_image(self):
-        self.renderer.update_scene(self.data, camera="fixed", scene_option=dict())
+    def render_image(self, camera="fixed"):
+        self.renderer.update_scene(self.data, camera=camera, scene_option=dict())
         pixels = self.renderer.render()
         return pixels
 
-    def write_image(self, image_name = 'output_frame.png'):
-        media.write_image(image_name, self.render_image())
+    def write_image(self, image_name = 'output_frame.png', camera="fixed"):
+        media.write_image(image_name, self.render_image(camera=camera))
 
-    def add_frame_if_needed(self):
+    def reset_frames(self):
+        self.frames = []
+
+    def add_frame_if_needed(self, camera="fixed"):
         if len(self.frames) < self.data.time * self.fps:
-            self.add_frame()
+            self.add_frame(camera=camera)
 
-    def add_frame(self):
-        self.frames.append(self.render_image())
+    def add_frame(self, camera="fixed"):
+        self.frames.append(self.render_image(camera=camera))
 
     def render_video(self, video_name = 'output_video.mp4'):
         media.write_video(video_name, self.frames, fps=self.fps)
@@ -184,23 +196,68 @@ class Simulation:
         mujoco.mj_forward(self.model, self.data)
 
     def make_whip_downwards(self):
+        # Get the rotation of the end-effector
+        index_of_endeffector = self.site_names.index("whip_dir")
+        rotation_matrix = self.data.site_xmat[index_of_endeffector].reshape(3, 3)
+        # print("Initial Rotation matrix: \n", rotation_matrix)
+
+        # Target downward vector
+        target_vector = np.array([0, 0, -1])
+
+        # Iterative alignment
+        max_iterations = 100
+        tolerance = 1e-3
+        best_alignment_error = np.inf
+        best_theta_x = 0
+        best_theta_y = 0
+
+        for iteration in range(max_iterations):
+            # Compute the residual rotation matrix
+            residual_rotation = compute_residual_rotation(rotation_matrix, target_vector)
+
+            # Decompose the residual rotation into joint-specific angles
+            theta_x = np.arctan2(residual_rotation[2, 1], residual_rotation[2, 2])  # x-axis
+            theta_y = np.arctan2(-residual_rotation[2, 0], np.sqrt(residual_rotation[2, 1]**2 + residual_rotation[2, 2]**2))  # y-axis
+
+            # print(f"Iteration {iteration + 1}")
+            # print("Residual Rotation matrix: \n", residual_rotation)
+            # print("Theta_x (degrees): ", np.degrees(theta_x))
+            # print("Theta_y (degrees): ", np.degrees(theta_y))
+
+            # Apply the corrections to the joints
+            index_of_whipx = self.joint_names.index("joint_whip_node1_X")
+            index_of_whipy = self.joint_names.index("joint_whip_node1_Y")
+            self.data.qpos[index_of_whipx] += theta_y
+            self.data.qpos[index_of_whipy] += theta_x
+            mujoco.mj_forward(self.model, self.data)
+
+            # Check the updated rotation matrix
+            rotation_matrix = self.data.site_xmat[index_of_endeffector].reshape(3, 3)
+            # print("Updated Rotation matrix: \n", rotation_matrix)
+
+            # Check alignment
+            final_z_axis = rotation_matrix[:, 2]
+            alignment_error = np.linalg.norm(final_z_axis - target_vector)
+            # print("Final Z-axis direction: ", final_z_axis)
+            # print("Alignment Error: ", alignment_error)
+            
+            # Update the best alignment error
+            if alignment_error < best_alignment_error:
+                best_alignment_error = alignment_error
+                best_theta_x = self.data.qpos[index_of_whipx]
+                best_theta_y = self.data.qpos[index_of_whipy]
+
+            if alignment_error < tolerance:
+                # print("Alignment achieved.")
+                break
+        else:
+            # print("Alignment not achieved within the maximum iterations.")
+            # print("Best Alignment Error: ", best_alignment_error)
+            self.data.qpos[index_of_whipy] = best_theta_y
+            self.data.qpos[index_of_whipx] = best_theta_x
+            mujoco.mj_forward(self.model, self.data)
         
-        # Get the rotation of the endeffector
-        index_of_endeffector = self.site_names.index("attachment_site")
-        yaw, pitch, roll = rot2euler( self.data.site_xmat[ index_of_endeffector ] )
 
-        #set the rotation of the whip
-        index_of_whipx = self.joint_names.index("joint_whip_node1_X")
-        index_of_whipy = self.joint_names.index("joint_whip_node1_Y")
-
-
-        for i in range( len(self.whip_node_names) ):
-            index_of_whip = self.joint_names.index(self.whip_node_names[i])
-            self.data.qpos[ index_of_whip ] = 0
-        self.data.qpos[ index_of_whipx ] = roll
-        self.data.qpos[ index_of_whipy ] = pitch
-
-        mujoco.mj_forward(self.model, self.data)
 
     def get_target_position(self):
         index_of_target = self.geom_names.index("geom_target")
@@ -249,3 +306,28 @@ class Simulation:
         box_size = self.get_box_size()
         random_position = np.random.uniform(-box_size/2, box_size/2) + box_position
         return random_position
+
+    def get_if_hit_target(self):
+
+        if self.distance_to_target() < 0.01:
+            return True
+        else:
+            return False
+
+    def get_pos_if_box_hit(self):
+        index_of_box = self.geom_names.index("geom_box")
+        index_of_whip = self.site_names.index("site_whip_tip")
+
+        box_position = self.data.geom_xpos[index_of_box]
+        box_size = self.model.geom_size[index_of_box]
+        box_min = box_position - box_size / 2
+        box_max = box_position + box_size / 2
+
+        whip_tip_position = self.data.site_xpos[index_of_whip]
+        
+
+
+        if np.all(box_min <= whip_tip_position) and np.all(whip_tip_position <= box_max):
+            return np.asarray(whip_tip_position)
+        else:
+            return None
