@@ -30,7 +30,10 @@ class Simulation:
         # Renderer settings. 
         self.fps = 240  
         self.frames = []
-
+        self.use_all_cameras = False
+        self.frames_x = []
+        self.frames_y = []
+        self.frames_z = []
 
         # The basic info of the model  actuator: 2
         self.actuator_names = [mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, i) for i in range(self.model.nu)]
@@ -165,6 +168,9 @@ class Simulation:
 
     def reset_frames(self):
         self.frames = []
+        self.frames_x = []
+        self.frames_y = []
+        self.frames_z = []
 
     def add_frame_if_needed(self, camera="fixed"):
         if len(self.frames) < self.data.time * self.fps:
@@ -172,9 +178,20 @@ class Simulation:
 
     def add_frame(self, camera="fixed"):
         self.frames.append(self.render_image(camera=camera))
+        if self.use_all_cameras:
+            self.frames_x.append(self.render_image(camera="fixedx"))
+            self.frames_y.append(self.render_image(camera="fixedy"))
+            self.frames_z.append(self.render_image(camera="fixedz"))
 
     def render_video(self, video_name = 'output_video.mp4'):
         media.write_video(video_name, self.frames, fps=self.fps)
+        if self.use_all_cameras:
+            video_name_x = video_name.replace(".mp4", "_x.mp4")
+            media.write_video(video_name_x, self.frames_x, fps=self.fps)
+            video_name_y = video_name.replace(".mp4", "_y.mp4")
+            media.write_video(video_name_y, self.frames_y, fps=self.fps)
+            video_name_z = video_name.replace(".mp4", "_z.mp4")
+            media.write_video(video_name_z, self.frames_z, fps=self.fps)
 
     def distance_to_target(self):
         # Get the Euclidean distance between the tip of the whip and the target
