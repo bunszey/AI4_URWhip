@@ -99,6 +99,17 @@ def main():
     plt.savefig(path + folder + "/rewards_per_200_episodes.pdf")
     plt.close()
     
+    #plot the timesteps per episode
+    plt.plot(timesteps_per_episode)
+    plt.xlabel("Episode")
+    plt.ylabel("Iterations")
+    plt.grid()
+    plt.savefig(path + folder + "/timesteps_per_episode.pdf")
+
+    #get the last 50 timesteps per episode
+    timesteps_per_episode_last = timesteps_per_episode[-50:]
+    print("Mean timesteps per episode last 50: ", np.mean(timesteps_per_episode_last))
+
     ############ End of cumulative rewards plot #############
 
 
@@ -156,7 +167,7 @@ def main():
             plt.plot( all_number_of_hits)
             plt.xlabel("Number of episodes")
             plt.ylabel("Percentage of hits (%)")
-            yticks = list(range(0, 81, 10))
+            yticks = list(range(0, 21, 5))
             plt.yticks(yticks, labels=yticks)
             plt.grid()
             plt.savefig(path + folder + "/number_of_hits.pdf")
