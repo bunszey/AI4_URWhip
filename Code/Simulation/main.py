@@ -1,81 +1,115 @@
 from utility.simulation import Simulation
+from utility.replay_buffer import ReplayBuffer
 import numpy as np
 import mediapy as media
 import math
 import mujoco
-
+import time
+import matplotlib.pyplot as plt
+import os
 def main():
 
     args = lambda: None
     args.model_name = "scene"
     
     simulation = Simulation(args)
-
-
-    action = simulation.random_action()
-    action = [-1.39095287,  3.4619481,  -0.21930487 , 0.89649079 ,-1.92544355 ,-2.03098799 ,-2.02422557, -0.41235709, -1.37341055 , 1.77293438 ,-2.7159907 , -1.96190319, 0.75030443]
-
-    for i in range(100):
-
-        target_position = [1.60304854, 0.07446196, 0.01489245]
-
-        make_video_of_action(simulation, action, target_position)
-
-
-
-        
-
-        #wait for user input
-        input("Press Enter to continue...")
-
-
     
+    path = "./results/"
+    folders = [f for f in os.listdir(path) if os.path.isdir(os.path.join(path, f))]
+    folders.sort()
+    folder = folders[-2]
+    print("folder: ", folder)
 
-def make_video_of_action(simulation, action, target_position):
-    simulation.reset_frames()
-    mujoco.mj_resetData(simulation.model, simulation.data)
-    
-    simulation.move_geom("geom_target", target_position[0:3])
+    rb = ReplayBuffer(simulation.s_dim, simulation.a_dim)
+    rb.load(path + folder + "/SAC_training_replay_buffer.npz")
 
-    q_init_vel = [0,0,0,0,0,0]
-    simulation.set_init_posture(action[0:6], q_init_vel)
-    simulation.make_whip_downwards()
-    
-    simulation.set_color_geom("geom_target", [0.0, 0.4470, 0.7410, 1.0])
+    states = rb.state
+    states = states[~np.all(states == 0, axis=1)]
 
-    mujoco.mj_forward(simulation.model, simulation.data)
+    actions = rb.action
+    actions = actions[~np.all(actions == 0, axis=1)]
 
 
-    simulation.planner.set_positions(action[0:6],action[6:12])
-    simulation.planner.set_duration(action[12])
-    
-    simulation.extra_run_time = 2.0
-    positions = []
 
-    while simulation.data.time < simulation.planner.D + simulation.extra_run_time:
+    state = simulation.unscale_observation(states[-1])
+    action = simulation.unscale_action(actions[-1])
+
+    simulation.init_action(state, action)
+
+    desired_positions = []
+    actual_positions = []
+    position_error = []
+
+    K = []
+    B = []
+
+    while simulation.data.time < action[-1] + simulation.extra_run_time:
+        desired_position = simulation.planner.get_desired_position(simulation.data.time)
+        desired_positions.append(desired_position)
+
+        actual_position = simulation.data.qpos.copy()
+        actual_positions.append(actual_position[:6])
+
+        position_error.append(desired_position - actual_position[:6])
+
         simulation.controller()
+        K.append(simulation.K[0][0])
+        B.append(simulation.B[0][0])
+        
         mujoco.mj_step(simulation.model, simulation.data)
-        
-        
-        pos = simulation.get_pos_if_box_hit()
-        if pos is not None:
-            positions.append(pos.copy())
-
-
-        if simulation.get_if_hit_target():
-            #change color of target
-            simulation.set_color_geom("geom_target", [0.0,1.0,0.0,1.0])
-            #make a image from each axis camera
-            simulation.write_image(image_name="output_frame_test_x.png",camera="fixedx")
-            simulation.write_image(image_name="output_frame_test_y.png",camera="fixedy")
-            simulation.write_image(image_name="output_frame_test_z.png",camera="fixedz")
-
-        simulation.add_frame_if_needed(camera="fixed")
 
     
-    print("action: ",action)
-    print("positions: ",positions)
-    simulation.render_video()
+    actual_positions_no_oiac = []
+    position_error_no_oiac = []
+    simulation.init_action(state, action)
+
+    while simulation.data.time < action[-1] + simulation.extra_run_time:
+        desired_position = simulation.planner.get_desired_position(simulation.data.time)
+
+        actual_position = simulation.data.qpos.copy()
+        actual_positions_no_oiac.append(actual_position[:6])
+
+        position_error_no_oiac.append(desired_position - actual_position[:6])
+
+        simulation.controller(use_oiac=False)
+        
+        mujoco.mj_step(simulation.model, simulation.data)
+
+
+    np.save(path + folder + "/desired_positions.npy", desired_positions)
+    np.save(path + folder + "/actual_positions.npy", actual_positions)
+    np.save(path + folder + "/position_error.npy", position_error)
+    np.save(path + folder + "/actual_positions_no_oiac.npy", actual_positions_no_oiac)
+    np.save(path + folder + "/position_error_no_oiac.npy", position_error_no_oiac)
+    np.save(path + folder + "/K.npy", K)
+
+    position_error = position_error[0:400]
+    position_error_no_oiac = position_error_no_oiac[0:400]
+    K = K[0:400]
+    B = B[0:400]
+
+    plt.plot([x[0] for x in position_error], label="Position error with OIAC")
+    plt.plot([x[0] for x in position_error_no_oiac], label="Position error with constant K and B")
+
+    plt.xlabel("Time step")
+    plt.ylabel("Position error (rad)")
+    plt.legend()
+    plt.grid()
+
+    plt.savefig(path + folder + "/position_error.pdf")
+    plt.close()
+
+    #plot change in K
+    plt.plot(K)
+    plt.plot(B)
+    plt.xlabel("Time step")
+    plt.ylabel("Gain")
+    plt.grid()
+    plt.legend(["K", "B"])
+    plt.savefig(path + folder + "/KB.pdf")
+    plt.close()
+
+
 
 
 if __name__ == '__main__':

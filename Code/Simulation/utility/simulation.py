@@ -38,6 +38,8 @@ class Simulation:
         self.frames_y = []
         self.frames_z = []
         self.positions = []
+        self.K = np.diag([0.14278282, 3.02316467, 0.21054788, -0.92810028, 66.44700533, 1.30332117])
+        self.B = np.diag([16.18231034, 217.11434533, 7.65075116, 65.78663436, 2374.91205629, 147.80398695])
 
         # The basic info of the model  actuator: 2
         self.actuator_names = [mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, i) for i in range(self.model.nu)]
@@ -53,7 +55,7 @@ class Simulation:
         self.whip_node_names = [name for name in self.joint_names if "whip" in name]
         #get end site names
         self.site_names = [mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_SITE, i) for i in range(self.model.nsite)]
-
+        
 
         # The basic info of the model actuator:
         self.n_act = len( self.actuator_names )
@@ -174,7 +176,7 @@ class Simulation:
         self.data.ctrl[:6] = torque
 
 
-    def controller(self):
+    def controller(self, use_oiac=True):
         qpos_original = self.data.qpos.copy()
         qvel_original = self.data.qvel.copy()
         qacc_original = self.data.qacc.copy()
@@ -194,26 +196,28 @@ class Simulation:
         position_error = desired_position - self.data.qpos[:6]
         velocity_error = desired_velocity - self.data.qvel[:6]
 
-        # Adapt stiffness and damping matrices
-        # Define parameters for adaptation
-        beta = 0.9
-        a = 0.001
-        C = 50.0
+        if use_oiac:
+            # Adapt stiffness and damping matrices
+            # Define parameters for adaptation
+            beta = 0.7
+            a = 0.4
+            C = 500.0
 
-        # Compute tracking error epsilon(t)
-        epsilon = position_error + beta * velocity_error
+            # Compute tracking error epsilon(t)
+            epsilon = position_error + beta * velocity_error
 
-        # Adapt impedance matrices K(t) and B(t)
-        gamma = a / (1 + C * np.linalg.norm(epsilon)**2)
-        K = np.diag(epsilon * position_error / gamma)
-        B = np.diag(epsilon * velocity_error / gamma)
+            # Adapt impedance matrices K(t) and B(t)
+            gamma = a / (1 + C * np.linalg.norm(epsilon)**2)
+            self.K = np.diag(epsilon * position_error / gamma)
+            self.B = np.diag(epsilon * velocity_error / gamma)
+        else:
+            # Define stiffness and damping matrices
+            self.K = np.diag([100, 100, 100, 50, 50, 50])
+            self.B = np.diag([10, 10, 10, 5, 5, 5])
 
-
-        # K = np.diag([0.14278282, 3.02316467, 0.21054788, -0.92810028, 66.44700533, 1.30332117])
-        # B = np.diag([16.18231034, 217.11434533, 7.65075116, 65.78663436, 2374.91205629, 147.80398695])
 
         # Calculate control torque with gravity compensation
-        torque = K @ position_error + B @ velocity_error + gravity_compensation[:6] 
+        torque = self.K @ position_error + self.B @ velocity_error + gravity_compensation[:6] 
 
         if self.debug:
             if int(self.data.time * 1000000) <= int(0.03 * 1000000):
@@ -239,7 +243,9 @@ class Simulation:
     def run(self, action, save_video=False, camera="fixed", potential_target=None):
         self.positions = []
         almost_hit_positions = []
-        miss_position = []
+        
+        
+
         distance_to_box = 1000
         has_hit_target = False
 
